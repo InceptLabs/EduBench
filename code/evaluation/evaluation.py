@@ -2,17 +2,32 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import json
 import time
+import os
+from httpx import Client
 from tqdm import tqdm
+from datetime import datetime
+import openai
+from dotenv import load_dotenv
+import argparse
+
+load_dotenv(dotenv_path='/Users/agariki/Documents/Incept/.env.local')
 
 # Simulated model functions
-def get_normal_answer(prompt, model_name):
+def get_normal_answer(prompt, client, model_name: str = 'accounts/fireworks/models/deepseek-r1-0528'):
     """Simulate calling a model and returning a result"""
     print(f"Calling model: {model_name}")
-    time.sleep(1)  # Simulate delay
-    return f"Answer from {model_name}"
+    # time.sleep(1)  # Simulate delay
+    completion = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                            # {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": prompt}
+                        ],
+                )
+    return [choice.message.content for choice in completion.choices]
 
 
-def get_reasoning_answer(prompt, model_name):
+def get_reasoning_answer(prompt, client, model_name):
     """Simulate calling a reasoning model"""
     reasoning = f"Reasoning steps for {model_name}"
     answer = f"Final answer from {model_name}"
@@ -38,20 +53,21 @@ TASK_PROMPT_TEMPLATES = {
 
 def process_single_model(args):
     """Thread function to call a single model"""
-    model_type, model_name, prompt = args
+    model_type, model_name, prompt, client = args
     try:
         if model_type == 'normal':
-            response = get_normal_answer(prompt, model_name)
+            response = get_normal_answer(prompt, client)
             return {'model': model_name, 'reasoning': None, 'response': response}
         elif model_type == 'reasoning':
-            reasoning, answer = get_reasoning_answer(prompt, model_name)
+            reasoning, answer = get_reasoning_answer(prompt, client)
             return {'model': model_name, 'reasoning': reasoning, 'response': answer}
     except Exception as e:
         print(f"Model {model_name} call failed: {e}")
         return None
 
 
-def process_single_task(task_id, task_type, input_data, normal_models, reasoning_models, output_file):
+# def process_single_task(task_id, task_type, input_data, normal_models, reasoning_models, output_file):
+def process_single_task(task_id, task_type, input_data, normal_models, client, output_file):
     """
     Process a single task based on its type and input data.
     """
@@ -87,7 +103,7 @@ def process_single_task(task_id, task_type, input_data, normal_models, reasoning
     results = []
     tasks = []
     for model in normal_models:
-        tasks.append(('normal', model, prompt_content))
+        tasks.append(('normal', model, prompt_content, client))
     # for model in reasoning_models:
     #     tasks.append(('reasoning', model, prompt_content))
 
@@ -116,12 +132,31 @@ def process_single_task(task_id, task_type, input_data, normal_models, reasoning
 
 
 def main():
-    # Configuration
-    input_jsonl_file = ""
-    output_jsonl_file = ""
 
-    normal_models = ['qwen2.5-7b-instruct', 'qwen2.5-14b-instruct', 'deepseek-v3']
-    reasoning_models = ['deepseek-r1']
+    parser = argparse.ArgumentParser(description="EduBench Evaluator")
+    parser.add_argument("--input_file", help="Path to the generated answers to be evaluated")
+    parser.add_argument("--output_file", help="Output file to save evaluation results")
+    parser.add_argument(
+        "--model", 
+        help="Fireworks model name",
+        default="accounts/fireworks/models/deepseek-r1-0528")
+
+    args = parser.parse_args()
+
+    # Configuration
+    input_jsonl_file = args.input_file
+    output_jsonl_file = args.output_file
+
+    # normal_models = ['deepseek-r1'] # ['qwen2.5-7b-instruct', 'qwen2.5-14b-instruct', 'deepseek-v3']
+    normal_models = [args.model]
+    # reasoning_models = ['deepseek-r1']
+
+    # create client
+    client = openai.OpenAI(
+        api_key=os.environ.get("FIREWORKS_API_KEY"),
+        base_url="https://api.fireworks.ai/inference/v1"
+    )
+
 
     # Load tasks
     tasks = []
@@ -149,7 +184,8 @@ def main():
                 ttype,
                 tdata,
                 normal_models,
-                reasoning_models,
+                client,
+                # reasoning_models,
                 output_jsonl_file
             ) for tid, ttype, tdata in tasks
         ]
